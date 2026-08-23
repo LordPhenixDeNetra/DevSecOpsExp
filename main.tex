@@ -1,0 +1,139 @@
+\documentclass[11pt,a4paper]{article}
+
+% ---------- Encodage & langue ----------
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[french]{babel}
+
+% ---------- Mise en page ----------
+\usepackage[margin=2.8cm]{geometry}
+\usepackage{setspace}
+\onehalfspacing
+
+% ---------- Typographie ----------
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{csquotes}
+
+% ---------- Couleurs & titres ----------
+\usepackage{xcolor}
+\definecolor{accentblue}{RGB}{31,78,140}
+\definecolor{tagolive}{RGB}{90,110,60}
+
+\usepackage{titlesec}
+\titleformat{\section}
+  {\normalfont\Large\bfseries\color{accentblue}}
+  {\thesection}{0.6em}{}
+\titleformat{\subsection}
+  {\normalfont\large\bfseries\color{accentblue}}
+  {}{0em}{}
+\titlespacing*{\section}{0pt}{2.2em}{1em}
+\titlespacing*{\subsection}{0pt}{1.6em}{0.6em}
+
+% ---------- Liens & table des matières ----------
+\usepackage{hyperref}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=accentblue,
+  urlcolor=accentblue,
+  pdftitle={Mon recueil de batailles techniques},
+  pdfauthor={},
+}
+
+% ---------- Petits blocs de code (gabarit, YAML, etc.) ----------
+\usepackage[htt]{hyphenat} % permet de couper \texttt{...} aux tirets existants
+\usepackage{listings}
+\lstset{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  framesep=6pt,
+  backgroundcolor=\color{gray!8},
+  rulecolor=\color{gray!40},
+  columns=fullflexible,
+  keywordstyle=\color{accentblue},
+}
+
+% ---------- Filet de séparation ----------
+\newcommand{\entryrule}{\par\noindent\rule{\linewidth}{0.6pt}\par}
+
+% ---------- Tags ----------
+\newcommand{\tag}[1]{\texttt{\color{tagolive}\#{#1}}}
+
+\title{\color{accentblue}\bfseries Mon recueil de batailles techniques}
+\author{}
+\date{}
+
+\begin{document}
+
+\maketitle
+\vspace{-2.5em}
+\begin{center}
+\textit{Un journal des bugs, des impasses et des victoires qui ont façonné mon parcours de dev.}
+\end{center}
+
+\vspace{1.5em}
+\tableofcontents
+\newpage
+
+% =====================================================
+\section*{Pourquoi ce recueil}
+\addcontentsline{toc}{section}{Pourquoi ce recueil}
+
+Chaque problème technique qu'on résout laisse une trace : une intuition affûtée, un réflexe de diagnostic, une leçon qu'on ne veut plus jamais réapprendre à la dure. Ce recueil sert à garder ces traces avant qu'elles ne s'effacent. Ce n'est pas une documentation technique froide — c'est l'histoire de ce que j'ai vécu en construisant, cassant, et réparant mes systèmes.
+
+Chaque entrée raconte : le contexte dans lequel le problème est apparu, ce que j'ai ressenti en le découvrant, comment j'ai creusé, ce qui a fini par marcher, et ce que j'en retiens.
+
+\entryrule
+
+
+\section{Entrée \#1 --- 23 août 2026 --- Le mystère de la collection Qdrant qui n'existait jamais}
+
+\subsection*{Contexte}
+Je venais de déployer mon application backend RAG sur Dokploy, avec MinIO pour le stockage des documents et Qdrant comme base vectorielle — les deux via les services proposés directement par Dokploy. Tout semblait en ordre : les conteneurs tournaient, l'interface web de gestion du RAG était accessible, l'authentification fonctionnait. J'étais dans cette phase satisfaisante où l'infrastructure semble enfin stable après le sprint de déploiement.
+
+\subsection*{Le problème}
+J'ai uploadé un premier fichier via mon appli web. Message de succès : \enquote{bien indexé}. Sauf qu'en allant vérifier dans le dashboard Qdrant, rien. Pas de collection, pas d'index, pas le moindre point vectoriel. Le vide total, alors que l'application m'assurait que tout allait bien. Ce genre de décalage entre ce que l'app affirme et ce qui existe réellement est particulièrement déstabilisant — on ne sait même pas par quel bout commencer à douter.
+
+\subsection*{L'enquête}
+J'ai commencé par fournir les logs et la configuration. Les logs révélaient une ligne qui changeait toute la lecture du problème : \texttt{[Errno 110] Connection timed out}, répétée à chaque tentative de contact avec Qdrant, sur plusieurs minutes d'affilée. Pas une erreur d'authentification, pas un refus de connexion — un vrai silence réseau. Premier réflexe : tester la connectivité brute avec \texttt{curl} (absent du conteneur), puis avec un one-liner Python (\texttt{httpx}). Résultat troublant : \textbf{ça a marché du premier coup}, \texttt{200 OK}, réponse quasi instantanée. Le service applicatif, lui, continuait à timeout en boucle, y compris lors d'un vrai upload de document qui a fini avec le statut \texttt{stored\_only} — stocké dans MinIO, jamais indexé.
+
+Ce paradoxe (un test manuel qui réussit, une app qui échoue en continu) a orienté l'enquête vers autre chose qu'un simple problème de firewall ou de DNS mort : quelque chose d'intermittent, ou une différence structurelle entre les deux chemins réseau. La bascule décisive a été de sortir du conteneur applicatif pour regarder l'hôte lui-même avec \texttt{docker ps} et \texttt{docker network ls} — remonter d'un niveau d'abstraction quand on tourne en rond dans un conteneur.
+
+\subsection*{Le déclic}
+En listant les conteneurs, les noms ont tout dit : \texttt{testapp-backend-yesagw}, \texttt{testapp-qdrant-rem4ui-qdrant-1}, \texttt{testapp-minioapp-7vxvpe-minio-1} — trois suffixes aléatoires différents, trois stacks Dokploy complètement indépendants. En inspectant \texttt{dokploy-network} (le réseau overlay partagé de la plateforme), le backend y était bien présent. Qdrant, non. Il vivait isolé sur son propre réseau bridge local, \texttt{testapp-qdrant-rem4ui}, jamais rattaché au réseau commun. Le backend et Qdrant n'avaient tout simplement jamais pu se parler en interne — toute communication devait obligatoirement sortir vers internet, traverser Traefik, et revenir sur le même serveur. Un aller-retour fragile, sujet à toutes sortes d'instabilités, qui expliquait à la fois les timeouts en rafale et le succès isolé du test manuel.
+
+\subsection*{La résolution}
+Édition du fichier \texttt{docker-compose} de Qdrant dans Dokploy pour y ajouter explicitement le réseau externe partagé :
+
+\begin{lstlisting}
+networks:
+  - dokploy-network
+
+networks:
+  dokploy-network:
+    external: true
+\end{lstlisting}
+
+Redéploiement du service Qdrant. Vérification que le conteneur apparaissait bien désormais dans \texttt{dokploy-network}. Puis, depuis le backend, un test de résolution DNS (\texttt{getent hosts qdrant}) a confirmé une IP interne valide, et un test de port (\texttt{/dev/tcp/qdrant/6333}) a répondu \texttt{OK} instantanément. Dernière étape : basculer la variable d'environnement \texttt{QDRANT\_URL} de l'URL publique HTTPS vers l'adresse interne \texttt{http://qdrant:6333}, redéployer le backend, et réuploader un document de test. Cette fois, la collection est apparue dans Qdrant avec ses points, en quelques secondes.
+
+\subsection*{Ce que j'en retiens}
+\begin{itemize}
+  \item Un \texttt{Connection timed out} (par opposition à un \texttt{refused}) est presque toujours un problème de routage ou d'isolation réseau, pas d'authentification ou de config applicative — ça vaut le coup de s'en souvenir pour gagner du temps la prochaine fois.
+  \item Un test manuel qui réussit alors que l'app échoue en boucle est un signal fort d'instabilité \textit{intermittente}, pas d'un blocage total — ça oriente immédiatement vers l'infrastructure réseau plutôt que vers le code.
+  \item Sur Dokploy (et plus largement avec Docker Swarm), chaque service déployé séparément peut vivre dans son propre réseau isolé par défaut. Il ne faut jamais supposer que deux services de la même « app logique » se voient automatiquement — toujours vérifier avec \texttt{docker network inspect}.
+  \item Faire communiquer deux services sur le même serveur en repassant systématiquement par le domaine public HTTPS (au lieu du réseau interne) est un anti-pattern classique : plus lent, plus fragile, et ça peut créer des instabilités qui ressemblent à des bugs applicatifs alors que ce n'en est pas un.
+  \item La bascule décisive dans le diagnostic n'est pas venue du code ou des logs applicatifs, mais du fait de sortir du conteneur pour regarder la topologie réseau depuis l'hôte. Quand on tourne en rond à l'intérieur d'une couche, il faut parfois prendre du recul et regarder la couche du dessous.
+\end{itemize}
+
+\subsection*{Tags}
+\tag{docker} \quad \tag{dokploy} \quad \tag{qdrant} \quad \tag{reseau} \quad \tag{rag} \quad \tag{deploiement}
+
+\entryrule
+
+% =====================================================
+\section{Entrée \#2 --- \textit{(à venir)}}
+
+\textit{...}
+
+\end{document}

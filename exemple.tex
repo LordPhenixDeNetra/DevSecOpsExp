@@ -1,0 +1,94 @@
+\documentclass[11pt,a4paper]{article}
+
+% ---------- Encodage & langue ----------
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[french]{babel}
+
+% ---------- Mise en page ----------
+\usepackage[margin=2.8cm]{geometry}
+\usepackage{setspace}
+\onehalfspacing
+
+% ---------- Typographie ----------
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{csquotes}
+
+% ---------- Couleurs & titres ----------
+% \usepackage{xcolor}
+\definecolor{accentblue}{RGB}{31,78,140}
+\definecolor{tagolive}{RGB}{90,110,60}
+
+\usepackage{titlesec}
+\titleformat{\section}
+  {\normalfont\Large\bfseries\color{accentblue}}
+  {\thesection}{0.6em}{}
+\titleformat{\subsection}
+  {\normalfont\large\bfseries\color{accentblue}}
+  {}{0em}{}
+\titlespacing*{\section}{0pt}{2.2em}{1em}
+\titlespacing*{\subsection}{0pt}{1.6em}{0.6em}
+
+% ---------- Liens & table des matières ----------
+\usepackage{hyperref}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=accentblue,
+  urlcolor=accentblue,
+  pdftitle={Mon recueil de batailles techniques},
+  pdfauthor={},
+}
+
+% ---------- Petits blocs de code (gabarit, YAML, etc.) ----------
+\usepackage[htt]{hyphenat} % permet de couper \texttt{...} aux tirets existants
+\usepackage{listings}
+\lstset{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  framesep=6pt,
+  backgroundcolor=\color{gray!8},
+  rulecolor=\color{gray!40},
+  columns=fullflexible,
+  keywordstyle=\color{accentblue},
+}
+
+% ---------- Filet de séparation ----------
+\newcommand{\entryrule}{\par\noindent\rule{\linewidth}{0.6pt}\par}
+
+% ---------- Tags ----------
+\newcommand{\tag}[1]{\texttt{\color{tagolive}\#{#1}}}
+
+\title{\color{accentblue}\bfseries Mon recueil de batailles techniques}
+\author{}
+\date{}
+
+\begin{document}
+
+
+
+
+
+
+Copie ce gabarit pour chaque nouvelle histoire :
+
+\begin{lstlisting}
+## Entree #N -- [Date] -- [Titre evocateur du probleme]
+
+Contexte : Qu'est-ce que je construisais, dans quel etat d'esprit j'etais.
+
+Le probleme : Ce qui a commence a clocher, et comment je m'en suis rendu compte.
+
+L'enquete : Les pistes suivies, les fausses pistes, les moments de doute.
+
+Le declic : Ce qui a fait basculer la comprehension.
+
+La resolution : Ce qui a ete fait concretement pour regler le probleme.
+
+Ce que j'en retiens : La lecon, l'intuition gagnee, ce que je ferai differemment.
+
+Tags : #docker #reseau #etc
+\end{lstlisting}
+
+\end{document}
