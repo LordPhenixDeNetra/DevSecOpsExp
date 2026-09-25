@@ -1,34 +1,67 @@
-\documentclass[11pt,a4paper]{article}
+% =====================================================
+%  Mon recueil de batailles techniques
+%  Mise en page : format roman broché 13 x 20 cm
+% =====================================================
+\documentclass[10pt,twoside,openany]{article}
 
 % ---------- Encodage & langue ----------
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
 \usepackage[french]{babel}
 
-% ---------- Mise en page ----------
-\usepackage[margin=2.8cm]{geometry}
-\usepackage{setspace}
-\onehalfspacing
+% ---------- Format de page (roman broché 13 x 20 cm) ----------
+\usepackage[
+  paperwidth=130mm, paperheight=200mm,
+  inner=17mm, outer=14mm,        % petit fond de page côté reliure
+  top=18mm, bottom=20mm,
+  headsep=5mm, footskip=9mm
+]{geometry}
+\linespread{1.08}                 % interligne serré, comme en édition
+\setlength{\parindent}{1.2em}     % alinéa à la française
+\setlength{\parskip}{0pt}
+\clubpenalty=10000                % pas de lignes orphelines
+\widowpenalty=10000               % pas de lignes veuves
+\raggedbottom
+\setlength{\emergencystretch}{2.5em} % évite les débordements sur une colonne étroite
 
 % ---------- Typographie ----------
-\usepackage{lmodern}
+\usepackage{tgpagella}            % police de labeur (type Palatino)
+\renewcommand{\ttdefault}{lmtt}   % chasse fixe vectorielle (Latin Modern)
 \usepackage{microtype}
 \usepackage{csquotes}
+\usepackage{enumitem}
+\setlist{leftmargin=1.4em, itemsep=0.25em, topsep=0.4em}
 
-% ---------- Couleurs & titres ----------
+% ---------- Couleurs ----------
 \usepackage{xcolor}
 \definecolor{accentblue}{RGB}{31,78,140}
 \definecolor{tagolive}{RGB}{90,110,60}
 
+% ---------- Titres : chaque entrée ouvre un chapitre ----------
 \usepackage{titlesec}
-\titleformat{\section}
-  {\normalfont\Large\bfseries\color{accentblue}}
-  {\thesection}{0.6em}{}
+\newcommand{\sectionbreak}{\clearpage}
+\titleformat{\section}[display]
+  {\normalfont\centering\color{accentblue}}
+  {}{0pt}
+  {\Large\itshape}
+  [\vspace{0.6em}{\color{accentblue}\rule{2.5cm}{0.4pt}}]
+\titlespacing*{\section}{0pt}{3.5em}{2.2em}
 \titleformat{\subsection}
-  {\normalfont\large\bfseries\color{accentblue}}
+  {\normalfont\scshape\color{accentblue}}
   {}{0em}{}
-\titlespacing*{\section}{0pt}{2.2em}{1em}
-\titlespacing*{\subsection}{0pt}{1.6em}{0.6em}
+\titlespacing*{\subsection}{0pt}{1.2em}{0.4em}
+
+% ---------- En-têtes et pieds de page ----------
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[CE]{\small\itshape Mon recueil de batailles techniques}
+\fancyhead[CO]{\small\itshape\rightmark}
+\fancyfoot[C]{\small\thepage}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\sectionmark}[1]{\markright{Entrée \thesection}}
+\fancypagestyle{plain}{\fancyhf{}\fancyfoot[C]{\small\thepage}}
+\usepackage{emptypage}            % pages blanches sans en-tête
 
 % ---------- Liens & table des matières ----------
 \usepackage{hyperref}
@@ -40,45 +73,53 @@
   pdfauthor={},
 }
 
-% ---------- Petits blocs de code (gabarit, YAML, etc.) ----------
-\usepackage[htt]{hyphenat} % permet de couper \texttt{...} aux tirets existants
+% ---------- Blocs de code ----------
+\usepackage[htt]{hyphenat}        % permet de couper \texttt{...} aux tirets existants
 \usepackage{listings}
+\usepackage{needspace}            % évite de couper un bloc de code court entre deux pages
 \lstset{
-  basicstyle=\ttfamily\small,
+  basicstyle=\ttfamily\scriptsize,
   breaklines=true,
   frame=single,
-  framesep=6pt,
+  framesep=4pt,
+  xleftmargin=4pt, xrightmargin=4pt,
   backgroundcolor=\color{gray!8},
   rulecolor=\color{gray!40},
   columns=fullflexible,
   keywordstyle=\color{accentblue},
 }
 
-% ---------- Filet de séparation ----------
-\newcommand{\entryrule}{\par\noindent\rule{\linewidth}{0.6pt}\par}
+% ---------- Séparateur de fin d'entrée (fleuron) ----------
+\newcommand{\entryrule}{\par\vspace{1.2em}\begin{center}\color{accentblue}$\ast$\quad$\ast$\quad$\ast$\end{center}\par}
 
 % ---------- Tags ----------
-\newcommand{\tag}[1]{\texttt{\color{tagolive}\#{#1}}}
-
-\title{\color{accentblue}\bfseries Mon recueil de batailles techniques}
-\author{}
-\date{}
+\newcommand{\tag}[1]{\texttt{\footnotesize\color{tagolive}\#{#1}}}
 
 \begin{document}
 
-\maketitle
-\vspace{-2.5em}
-\begin{center}
-\textit{Un journal des bugs, des impasses et des victoires qui ont façonné mon parcours de dev.}
-\end{center}
+% ---------- Page de titre ----------
+\begin{titlepage}
+  \centering
+  \vspace*{0.22\textheight}
+  {\color{accentblue}\rule{\linewidth}{0.4pt}\par}
+  \vspace{1.2em}
+  {\LARGE\color{accentblue} Mon recueil\\[0.3em] de batailles techniques\par}
+  \vspace{1.2em}
+  {\color{accentblue}\rule{\linewidth}{0.4pt}\par}
+  \vspace{2em}
+  {\itshape Un journal des bugs, des impasses\\ et des victoires qui ont façonné\\ mon parcours de dev.\par}
+  \vfill
+\end{titlepage}
 
-\vspace{1.5em}
+% ---------- Table des matières ----------
+\renewcommand{\contentsname}{Sommaire}
 \tableofcontents
-\newpage
+\thispagestyle{empty}
 
 % =====================================================
 \section*{Pourquoi ce recueil}
 \addcontentsline{toc}{section}{Pourquoi ce recueil}
+\markright{Pourquoi ce recueil}
 
 Chaque problème technique qu'on résout laisse une trace : une intuition affûtée, un réflexe de diagnostic, une leçon qu'on ne veut plus jamais réapprendre à la dure. Ce recueil sert à garder ces traces avant qu'elles ne s'effacent. Ce n'est pas une documentation technique froide — c'est l'histoire de ce que j'ai vécu en construisant, cassant, et réparant mes systèmes.
 
@@ -106,6 +147,7 @@ En listant les conteneurs, les noms ont tout dit : \texttt{testapp-backend-yesag
 \subsection*{La résolution}
 Édition du fichier \texttt{docker-compose} de Qdrant dans Dokploy pour y ajouter explicitement le réseau externe partagé :
 
+\needspace{8\baselineskip}
 \begin{lstlisting}
 networks:
   - dokploy-network

@@ -54,11 +54,15 @@ Le PDF généré `main.pdf` est ignoré par git (voir `.gitignore`).
 
 ## 🎨 Mise en page
 
-- Classe `article`, 11pt, A4, marges 2.8 cm, interligne 1.5
-- Police : Latin Modern avec `microtype`
+- Format **roman broché 13 × 20 cm**, recto-verso (marge intérieure plus large côté reliure)
+- Classe `article` 10pt, interligne serré, alinéas à la française, sans veuves ni orphelines
+- Police : TeX Gyre Pagella (type Palatino) avec `microtype` ; code en Latin Modern Mono
+- Page de titre, sommaire, puis **chaque entrée commence sur une nouvelle page** comme un chapitre
+- En-têtes courants : titre du recueil (pages paires), numéro de l'entrée (pages impaires) ; folio centré en pied de page
 - Couleurs : bleu accent (titres, liens), olive (tags)
-- Blocs de code cadrés sur fond gris
-- Séparateurs visuels entre chaque entrée
+- Blocs de code cadrés sur fond gris, protégés contre la coupure de page (`\needspace`)
+- Fin d'entrée marquée par un fleuron `* * *`
+- Pour changer de format, modifier `paperwidth` / `paperheight` dans l'appel à `geometry` (ex. 14 × 21,5 cm ou poche 11 × 17,8 cm)
 
 ## 📜 Licence
 
