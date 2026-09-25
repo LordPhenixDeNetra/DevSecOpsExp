@@ -48,6 +48,35 @@ Redéploiement du service Qdrant. Vérification que le conteneur apparaissait bi
 
 ---
 
-## Entrée #2 — *(à venir)*
+## Entrée #2 — 25 septembre 2026 — Le login qui ne marchait que sur le serveur
+
+**Contexte :** J'avais déployé une application d'anatomopathologie en local à l'hôpital HOGIP (ex-CTO), sur un serveur Docker à l'adresse `172.16.0.5`. Quatre conteneurs dans un même `docker-compose` : PostgreSQL, un backend Spring Boot (port `8080`), un frontend React servi sur le port `80`, et MinIO. Le frontend avait été buildé avec `VITE_API_URL=http://172.16.0.5:8080/api`. Sur le serveur lui-même, tout fonctionnait : page de login, authentification, accès à l'interface d'administration.
+
+**Le problème :** Depuis les autres postes du même réseau, le frontend s'affichait bien dans le navigateur, mais l'authentification échouait systématiquement. Même application, mêmes identifiants, même réseau : ça passait sur le serveur et nulle part ailleurs. J'ai fini par me déplacer de chez moi jusqu'au service informatique de l'hôpital pour enquêter sur place.
+
+**L'enquête :** Trois pistes classiques pour ce symptôme « ça marche sur le serveur, pas sur les clients » :
+1. Une URL d'API contenant encore `localhost`, figée dans le bundle au moment du build (les variables `VITE_*` sont injectées au build, pas au démarrage du conteneur). Sur le serveur, `localhost` désigne le serveur ; sur un client, il désigne le client lui-même.
+2. Une configuration CORS du backend qui n'autorise que l'origine `http://localhost` et rejette `http://172.16.0.5`.
+3. Un pare-feu sur le serveur qui laisse passer le port `80` mais pas le `8080`.
+
+J'ai ouvert les DevTools (F12 → onglets *Network* et *Console*) sur un poste client pendant une tentative de connexion. Les requêtes partaient bien vers `http://172.16.0.5:8080/api`, et non vers `localhost`. Première piste écartée : le build du frontend était correct.
+
+**Le déclic :** Le front s'affichait (port `80` joignable) mais les appels API échouaient (port `8080`). En consultant les règles entrantes du pare-feu du serveur, le constat était sans appel : **seul le port 80 était ouvert**. Sur le serveur, les appels vers `8080` restaient locaux et ne traversaient jamais le pare-feu ; depuis les autres machines, ils étaient bloqués.
+
+**La résolution :** Ajout d'une règle entrante autorisant le port TCP `8080` sur le pare-feu du serveur. Test immédiat depuis une autre machine du réseau : l'authentification passe et l'interface d'administration s'ouvre. Aucune modification du code, du `docker-compose` ou des images n'a été nécessaire.
+
+**Ce que j'en retiens :**
+- « Ça marche sur le serveur mais pas depuis les clients » : le trafic du serveur vers lui-même ne passe pas par les mêmes règles que le trafic venant du réseau. Tester depuis le serveur ne prouve rien pour les clients — il faut toujours tester depuis une autre machine.
+- Un frontend qui s'affiche ne prouve que l'ouverture de *son* port. Avec un front et une API sur des ports différents, il faut vérifier chaque port séparément (`curl http://172.16.0.5:8080/...` depuis un client aurait suffi).
+- Les DevTools sont le premier réflexe : l'onglet *Network* montre l'URL réellement appelée et le type d'échec (timeout, CORS, 401…), ce qui élimine des pistes en quelques secondes.
+- Publier un port avec Docker (`ports: "8080:8080"`) ne l'ouvre pas pour autant dans un pare-feu en amont : ce sont deux couches distinctes à vérifier.
+- Piste d'amélioration : faire passer l'API derrière un reverse proxy Nginx dans le conteneur frontend (`VITE_API_URL=/api`, `proxy_pass http://backend:8080`). Un seul port exposé, plus de CORS, plus d'IP en dur — et une règle de pare-feu en moins à oublier.
+- Documenter les règles de pare-feu nécessaires au déploiement, et obtenir un accès distant (VPN, SSH) au serveur : un problème de port ne devrait pas coûter un déplacement.
+
+**Tags :** `#docker` `#pare-feu` `#réseau` `#spring-boot` `#react` `#vite` `#déploiement` `#on-premise`
+
+---
+
+## Entrée #3 — *(à venir)*
 
 *...*
