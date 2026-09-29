@@ -130,6 +130,51 @@ Cela a donné un invariant vérifiable : `totalGeneral + exclus.total` = nombre 
 
 ---
 
-## Entrée #4 — *(à venir)*
+## Entrée #4 — 29 septembre 2026 — Les résultats de laboratoire qui montraient le mauvais patient
+
+**Contexte :** Dans Hopitalia, la page « Résultats Labo Plus » affichait tous les résultats de laboratoire d'un patient, issus de cinq sources : l'automate Hoggy, les examens manuels de bactériologie (stockés en JSON), la sérologie VIH, la toxoplasmose/rubéole et l'HGPO. Côté backend, tout reposait sur une seule requête SQL native : une `UNION ALL` de cinq branches, 842 lignes au total, accompagnée de sa propre requête de comptage pour la pagination. Côté front, l'index du patient était calculé à partir de quinze champs possibles, avec « nom prénom » en dernier recours.
+
+**Le problème :** Je n'avais que des bugs sur cette page, et chaque correction semblait en faire apparaître un autre. L'onglet Historique ne chargeait pas, la pagination affichait des totaux incohérents, des lignes apparaissaient en double. J'avais l'intuition que la complexité des requêtes était en cause, sans savoir par où commencer.
+
+**L'enquête :** Plutôt que de relire la requête, j'ai reproduit chaque symptôme par un vrai appel sur la base de test. Chaque bug a trouvé sa cause :
+- L'onglet Historique envoyait `sort=idResultatLigne`. Spring Data, face à une requête native, préfixait ce champ inconnu par l'alias qu'il croyait détecter : `e.idResultatLigne`. PostgreSQL répondait `missing FROM-clause entry for table "e"`.
+- Pour un patient à 136 lignes, `totalElements` valait successivement 50, 100, 136 puis 12 selon la page. La requête de comptage n'éclatait pas le JSON de la branche bactério (`jsonb_each`), contrairement à la requête principale : les deux copies avaient divergé.
+- Le pire : deux fiches homonymes (même nom, même prénom, index différents) voyaient les résultats l'une de l'autre, et chaque ligne apparaissait en double. En cause, une jointure de rapprochement présente dans chaque branche :
+
+```sql
+LEFT JOIN fiche_patient fp
+  ON (fp.nom = e.nom AND fp.prenom = e.prenom)
+  OR (fp.nin IS NOT NULL AND fp.nin IN (e.nin, e.numcin, e.matricule, ...))
+  OR (fp.matricule IS NOT NULL AND fp.matricule IN (...))
+  OR ...
+```
+
+D'autres bombes attendaient leur heure. La source d'une ligne (automate, VIH…) était déduite de plages d'identifiants négatifs (`-100000`, `-200000`…) : au-delà de 100 000 détails bactério, ils seraient devenus des « VIH ». Des sérologies VIH non validées s'affichaient sans aucune mention. Un résultat sans date recevait `CURRENT_DATE` et apparaissait comme « du jour ». Enfin, le bloc d'identification du patient était copié vingt fois (5 branches × 4 requêtes) : la divergence du comptage n'était que la première.
+
+**Le déclic :** En interrogeant la base, j'ai constaté que `fiche_patient.index` était **unique et obligatoire**, et que 553 entrées sur 562 portaient ce même index. Le lien entre un patient et ses passages existait déjà, simple et sûr : `entree."index" = fiche_patient."index"`. Toutes ces jointures par nom, NIN ou matricule, censées « rattraper » des cas, étaient non seulement inutiles, mais dangereuses. La complexité n'était pas un décor autour des bugs : c'était le bug.
+
+**La résolution :** La requête géante a été remplacée par une architecture en trois temps :
+- **Identifier le patient une seule fois** : l'index exact ; à défaut, un NIN ou un matricule accepté seulement s'il ne désignait qu'un seul patient (sinon `409`) ; un identifiant inconnu donnait `404` au lieu d'une page vide. Plus aucun rapprochement par nom.
+- **Une requête courte par source**, filtrée par `WHERE e."index" = :index`, chacune déclarant elle-même sa source. Chaque ligne recevait une clé unique (`BACTERIO_MANUEL:205:glycemie`).
+- **Fusion, tri et pagination en Java** : un patient ayant au plus quelques centaines de lignes, la pagination en mémoire était exacte, sans requête de comptage. Le tri n'acceptait qu'une liste blanche de champs, avec une erreur `400` explicite pour les autres.
+
+Les résultats non validés ont été conservés mais marqués d'un statut de validation, une date absente est restée `null`, et l'onglet Jour a reçu un vrai paramètre `date`. Les URLs et la structure de réponse n'ont pas changé. Un Runner a vérifié 120 assertions sur la base de test, dont l'absence de fuite entre les deux homonymes, et une note a été rédigée pour le développeur frontend.
+
+Dernier rebondissement : le développeur frontend a signalé une erreur `500` (`NoClassDefFoundError` sur l'ancien mapper) et l'ancienne erreur SQL. Le serveur lancé depuis l'IDE tournait depuis 01:11, avant la refonte, avec l'ancien code en mémoire ; entre-temps, les anciens `.class` avaient été supprimés de `target/classes`. Un simple redémarrage a suffi.
+
+**Ce que j'en retiens :**
+- Face à une avalanche de bugs, reproduire chaque symptôme par un appel réel avant de toucher au code : la liste des causes vient des faits, pas de la relecture.
+- Un bloc copié vingt fois finit toujours par diverger. Une requête de comptage écrite à la main à côté d'une `UNION`, c'est deux vérités à maintenir.
+- Ne jamais identifier un patient par son nom et son prénom. Dans une application médicale, afficher les résultats d'un autre patient est le pire bug possible : il faut utiliser l'identifiant unique qui existe déjà, et refuser (`404`, `409`) plutôt que deviner.
+- Ne jamais encoder une information dans des plages d'identifiants : la source d'une ligne doit être une donnée explicite.
+- Quand le volume par clé est borné, une pagination en mémoire exacte vaut mieux qu'une pagination SQL « astucieuse » qui ment sur ses totaux.
+- Ne rien masquer ni inventer : un résultat non validé s'affiche marqué, une date absente n'est pas la date du jour.
+- Avant de conclure qu'une correction ne marche pas, vérifier quel build tourne réellement (processus, heure de démarrage). Et ne jamais toucher à `target/classes` sous un serveur actif.
+
+**Tags :** `#spring-boot` `#spring-data-jpa` `#postgresql` `#sql` `#pagination` `#securite-patient` `#legacy` `#refactoring`
+
+---
+
+## Entrée #5 — *(à venir)*
 
 *...*
