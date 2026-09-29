@@ -214,7 +214,74 @@ Ajout d'une règle entrante autorisant le port TCP \texttt{8080} sur le pare-feu
 \entryrule
 
 % =====================================================
-\section{Entrée \#3 --- \textit{(à venir)}}
+\section{Entrée \#3 --- 28-29 septembre 2026 --- Le TACOJO et le code \enquote{007} qui ne voulait rien dire ailleurs}
+
+\subsection*{Contexte}
+Je pilotais Hopitalia, la refonte en Spring Boot / PostgreSQL d'une ancienne application hospitalière écrite en WinDev. Le même backend était déployé dans plusieurs hôpitaux (Albert Royer, Dantec\dots) et centres de santé, chacun avec sa propre base de données. Parmi les écrans à porter : le TACOJO, un rapport du laboratoire qui comptait les actes réalisés sur une période, séparément pour les patients externes et pour les patients hospitalisés. Un développeur backend l'avait déjà porté, mais le résultat ne m'inspirait pas confiance.
+
+\subsection*{Le problème}
+Dans WinDev, les deux requêtes du TACOJO contenaient la même ligne : \texttt{PRESTATION.CODE\_SPECIALITE = '007'}. Un code figé, valable dans une seule base. Le portage Java avait supprimé le \texttt{007}\dots{} pour le remplacer par d'autres fragilités :
+\begin{itemize}
+  \item une méthode \texttt{resolveCategorieAndCode} qui \enquote{devinait} la catégorie à partir de la spécialité en prenant \texttt{rows.get(0)} d'une liste sans ordre garanti --- la catégorie choisie par l'utilisateur pouvait être silencieusement remplacée par une autre ;
+  \item des filtres où \enquote{vide} voulait dire \enquote{pas de filtre} : un appel sans paramètre comptait tous les actes de l'hôpital, sans la moindre erreur ;
+  \item deux nouveaux codes en dur, \texttt{NOT IN ('D23', '55524')} ;
+  \item des jointures par nom (\texttt{nom\_specialite = :nomServiceSalle}) au lieu des identifiants, et des prestations d'hospitalisation sans salle qui disparaissaient du rapport sans laisser de trace.
+\end{itemize}
+
+\subsection*{L'enquête}
+Plutôt que de corriger le code Java ligne par ligne, je suis reparti des trois fichiers WinDev d'origine (\texttt{REQUETE\_Tacojo}, \texttt{REQ\_TACOJO\_HOSP}, \texttt{BTN OK}) pour comprendre ce qu'ils faisaient vraiment. Quelques pièges sont apparus : l'alias \texttt{REF\_ACTE} désignait en fait un \texttt{COUNT} ; le combo nommé \texttt{COMBO\_specialite} filtrait sur \texttt{ACTE.CATEGORIE} ; la boucle hospitalisation relisait salle et spécialité avec \texttt{HLitRecherche} et, en cas d'échec, réutilisait le buffer de la ligne précédente --- un acte pouvait être compté dans le mauvais service.
+
+Ensuite, j'ai reformulé la question métier sans le \texttt{007}. Au labo, la spécialité n'était pas un critère : \textit{c'était} le labo. La question devenait : \textbf{combien de fois chaque acte d'une section du labo a-t-il été facturé sur la période, selon la provenance du patient ?} Même le vocabulaire comptait : on comptait des \textit{actes facturés} (des prestations), pas des \textit{analyses réalisées} --- ce n'était pas la même chose si un acte regroupait plusieurs analyses ou si une prestation était annulée.
+
+\subsection*{Le déclic}
+Tout a basculé quand j'ai interrogé la vraie base au lieu de raisonner sur le code. Dans Hopitalia, le laboratoire était un \textit{service} (\texttt{LABORATOIRE}) qui regroupait trois spécialités : Biochimie, Hématologie, Bactériologie. Le \texttt{007} de WinDev, c'était la Bactériologie. Les \enquote{sections} du labo étaient donc des spécialités, et non des catégories d'actes (qui contenaient des valeurs génériques comme \texttt{EXAMEN} ou \texttt{CONSULTATION}).
+
+Première correction : j'ai déplacé le code du service labo (\texttt{LABO01}) dans \texttt{application.yml}, surchargeable par variable d'environnement. Ça me semblait propre\dots{} jusqu'à ce que je réalise que ce n'était qu'un \texttt{007} déplacé. D'un hôpital à l'autre, les codes des services, des spécialités et des actes étaient complètement différents. Une valeur par défaut dans un fichier de déploiement restait une donnée métier figée.
+
+\subsection*{La résolution}
+Le périmètre du rapport est passé dans les données, paramétrables depuis l'application par chaque hôpital :
+\begin{itemize}
+  \item une case \texttt{service.laboratoire} : les spécialités des services cochés devenaient les sections du TACOJO, quel que soit leur code ;
+  \item une case \texttt{acte.exclu\_tacojo} pour les actes à ne jamais compter (en remplacement de \texttt{D23} / \texttt{55524}) ;
+  \item si aucun service n'était coché, l'API répondait désormais \texttt{409} avec un message explicite, au lieu d'un rapport vide trompeur.
+\end{itemize}
+
+Les deux endpoints ont été remplacés par un seul \texttt{GET /api/v1/laboratoire/tacojo}, qui renvoyait directement la matrice acte $\times$ provenance (Externes, puis une colonne par service d'hospitalisation). Côté SQL, une seule requête rangeait chaque prestation dans \textbf{une et une seule} provenance, exclusions comprises :
+
+\needspace{14\baselineskip}
+\begin{lstlisting}
+CASE
+  WHEN e.type = :typeHospitalisation THEN
+    CASE WHEN sp_hosp.id IS NULL THEN 'HOSPITALISATION_SANS_SERVICE'
+         ELSE 'HOSPITALISATION' END
+  WHEN e.type IN (:typesExternes) THEN
+    CASE WHEN COALESCE(e.passer_par_sau, FALSE)    THEN 'EXCLU_SAU'
+         WHEN COALESCE(e.paiement_modalite, FALSE) THEN 'EXCLU_MODALITE'
+         WHEN NOT COALESCE(p.paye, FALSE)          THEN 'EXCLU_NON_PAYE'
+         ELSE 'EXTERNE' END
+  ELSE 'EXCLU_TYPE_ENTREE_INCONNU'
+END AS provenance
+\end{lstlisting}
+
+Cela a donné un invariant vérifiable : \texttt{totalGeneral + exclus.total} = nombre de prestations du labo sur la période. Enfin, un \texttt{TacojoRunner} recalculait chaque règle WinDev par une requête SQL indépendante et la comparait au service : 30 vérifications au vert sur la base de test. Une note a été rédigée pour le développeur frontend.
+
+\subsection*{Ce que j'en retiens}
+\begin{itemize}
+  \item Supprimer un code en dur ne suffit pas : il faut se demander \textit{à qui} appartient l'information. \texttt{007} $\rightarrow$ \texttt{LABO01} dans le yml, c'était le même problème déplacé d'une couche.
+  \item En déploiement multi-sites, toute donnée qui varie d'une base à l'autre doit vivre dans la base et être modifiable depuis l'application --- ni dans le code, ni dans la configuration de déploiement.
+  \item Avant de porter du code legacy, reformuler la question métier en une phrase. Elle révèle les critères inutiles (la spécialité) et les confusions de vocabulaire (acte / analyse, spécialité / catégorie).
+  \item Interroger les vraies données tôt : une requête sur la base a tranché en quelques secondes ce que des heures de lecture de code n'auraient pas établi.
+  \item Un paramètre deviné (\texttt{rows.get(0)}) est pire qu'une erreur. Un rapport ne doit jamais rien perdre en silence : refuser explicitement, et rendre visible ce qui est exclu.
+  \item Les règles d'un système legacy se protègent mieux par des assertions indépendantes que par la relecture : si le rapport et le recalcul divergent, le Runner le dit.
+\end{itemize}
+
+\subsection*{Tags}
+\tag{spring-boot} \quad \tag{postgresql} \quad \tag{windev} \quad \tag{migration} \quad \tag{legacy} \quad \tag{multi-sites} \quad \tag{sql} \quad \tag{laboratoire}
+
+\entryrule
+
+% =====================================================
+\section{Entrée \#4 --- \textit{(à venir)}}
 
 \textit{...}
 

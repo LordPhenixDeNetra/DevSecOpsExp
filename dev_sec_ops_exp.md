@@ -77,6 +77,59 @@ J'ai ouvert les DevTools (F12 → onglets *Network* et *Console*) sur un poste c
 
 ---
 
-## Entrée #3 — *(à venir)*
+## Entrée #3 — Du 28 au 29 septembre 2026 — Le TACOJO et le code « 007 » qui ne voulait rien dire ailleurs
+
+**Contexte :** Je pilotais Hopitalia, la refonte en Spring Boot / PostgreSQL d'une ancienne application hospitalière écrite en WinDev. Le même backend était déployé dans plusieurs hôpitaux (Albert Royer, Dantec…) et centres de santé, chacun avec sa propre base de données. Parmi les écrans à porter : le TACOJO, un rapport du laboratoire qui comptait les actes réalisés sur une période, séparément pour les patients externes et pour les patients hospitalisés. Un développeur backend l'avait déjà porté, mais le résultat ne m'inspirait pas confiance.
+
+**Le problème :** Dans WinDev, les deux requêtes du TACOJO contenaient la même ligne : `PRESTATION.CODE_SPECIALITE = '007'`. Un code figé, valable dans une seule base. Le portage Java avait supprimé le `007`… pour le remplacer par d'autres fragilités :
+- une méthode `resolveCategorieAndCode` qui « devinait » la catégorie à partir de la spécialité en prenant `rows.get(0)` d'une liste sans ordre garanti — la catégorie choisie par l'utilisateur pouvait être silencieusement remplacée par une autre ;
+- des filtres où « vide » voulait dire « pas de filtre » : un appel sans paramètre comptait tous les actes de l'hôpital, sans la moindre erreur ;
+- deux nouveaux codes en dur, `NOT IN ('D23', '55524')` ;
+- des jointures par nom (`nom_specialite = :nomServiceSalle`) au lieu des identifiants, et des prestations d'hospitalisation sans salle qui disparaissaient du rapport sans laisser de trace.
+
+**L'enquête :** Plutôt que de corriger le code Java ligne par ligne, je suis reparti des trois fichiers WinDev d'origine (`REQUETE_Tacojo`, `REQ_TACOJO_HOSP`, `BTN OK`) pour comprendre ce qu'ils faisaient vraiment. Quelques pièges sont apparus : l'alias `REF_ACTE` désignait en fait un `COUNT` ; le combo nommé `COMBO_specialite` filtrait sur `ACTE.CATEGORIE` ; la boucle hospitalisation relisait salle et spécialité avec `HLitRecherche` et, en cas d'échec, réutilisait le buffer de la ligne précédente — un acte pouvait être compté dans le mauvais service.
+
+Ensuite, j'ai reformulé la question métier sans le `007`. Au labo, la spécialité n'était pas un critère : *c'était* le labo. La question devenait : **combien de fois chaque acte d'une section du labo a-t-il été facturé sur la période, selon la provenance du patient ?** Même le vocabulaire comptait : on comptait des *actes facturés* (des prestations), pas des *analyses réalisées* — ce n'était pas la même chose si un acte regroupait plusieurs analyses ou si une prestation était annulée.
+
+**Le déclic :** Tout a basculé quand j'ai interrogé la vraie base au lieu de raisonner sur le code. Dans Hopitalia, le laboratoire était un *service* (`LABORATOIRE`) qui regroupait trois spécialités : Biochimie, Hématologie, Bactériologie. Le `007` de WinDev, c'était la Bactériologie. Les « sections » du labo étaient donc des spécialités, et non des catégories d'actes (qui contenaient des valeurs génériques comme `EXAMEN` ou `CONSULTATION`).
+
+Première correction : j'ai déplacé le code du service labo (`LABO01`) dans `application.yml`, surchargeable par variable d'environnement. Ça me semblait propre… jusqu'à ce que je réalise que ce n'était qu'un `007` déplacé. D'un hôpital à l'autre, les codes des services, des spécialités et des actes étaient complètement différents. Une valeur par défaut dans un fichier de déploiement restait une donnée métier figée.
+
+**La résolution :** Le périmètre du rapport est passé dans les données, paramétrables depuis l'application par chaque hôpital :
+- une case `service.laboratoire` : les spécialités des services cochés devenaient les sections du TACOJO, quel que soit leur code ;
+- une case `acte.exclu_tacojo` pour les actes à ne jamais compter (en remplacement de `D23` / `55524`) ;
+- si aucun service n'était coché, l'API répondait désormais `409` avec un message explicite, au lieu d'un rapport vide trompeur.
+
+Les deux endpoints ont été remplacés par un seul `GET /api/v1/laboratoire/tacojo`, qui renvoyait directement la matrice acte × provenance (Externes, puis une colonne par service d'hospitalisation). Côté SQL, une seule requête rangeait chaque prestation dans **une et une seule** provenance, exclusions comprises :
+
+```sql
+CASE
+  WHEN e.type = :typeHospitalisation THEN
+    CASE WHEN sp_hosp.id IS NULL THEN 'HOSPITALISATION_SANS_SERVICE'
+         ELSE 'HOSPITALISATION' END
+  WHEN e.type IN (:typesExternes) THEN
+    CASE WHEN COALESCE(e.passer_par_sau, FALSE)    THEN 'EXCLU_SAU'
+         WHEN COALESCE(e.paiement_modalite, FALSE) THEN 'EXCLU_MODALITE'
+         WHEN NOT COALESCE(p.paye, FALSE)          THEN 'EXCLU_NON_PAYE'
+         ELSE 'EXTERNE' END
+  ELSE 'EXCLU_TYPE_ENTREE_INCONNU'
+END AS provenance
+```
+
+Cela a donné un invariant vérifiable : `totalGeneral + exclus.total` = nombre de prestations du labo sur la période. Enfin, un `TacojoRunner` recalculait chaque règle WinDev par une requête SQL indépendante et la comparait au service : 30 vérifications au vert sur la base de test. Une note a été rédigée pour le développeur frontend.
+
+**Ce que j'en retiens :**
+- Supprimer un code en dur ne suffit pas : il faut se demander *à qui* appartient l'information. `007` → `LABO01` dans le yml, c'était le même problème déplacé d'une couche.
+- En déploiement multi-sites, toute donnée qui varie d'une base à l'autre doit vivre dans la base et être modifiable depuis l'application — ni dans le code, ni dans la configuration de déploiement.
+- Avant de porter du code legacy, reformuler la question métier en une phrase. Elle révèle les critères inutiles (la spécialité) et les confusions de vocabulaire (acte / analyse, spécialité / catégorie).
+- Interroger les vraies données tôt : une requête sur la base a tranché en quelques secondes ce que des heures de lecture de code n'auraient pas établi.
+- Un paramètre deviné (`rows.get(0)`) est pire qu'une erreur. Un rapport ne doit jamais rien perdre en silence : refuser explicitement, et rendre visible ce qui est exclu.
+- Les règles d'un système legacy se protègent mieux par des assertions indépendantes que par la relecture : si le rapport et le recalcul divergent, le Runner le dit.
+
+**Tags :** `#spring-boot` `#postgresql` `#windev` `#migration` `#legacy` `#multi-sites` `#sql` `#laboratoire`
+
+---
+
+## Entrée #4 — *(à venir)*
 
 *...*
