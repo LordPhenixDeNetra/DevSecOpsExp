@@ -175,6 +175,44 @@ Dernier rebondissement : le développeur frontend a signalé une erreur `500` (`
 
 ---
 
-## Entrée #5 — *(à venir)*
+## Entrée #5 — 2 octobre 2026 — La carte PASTEF que la prod cherchait sur ma machine
+
+**Contexte :** MONCAP, la plateforme d'adhésion en React + Vite, était déployée en ligne sur `https://moncap.innovamind.tech`, avec un backend FastAPI hébergé à part. La première étape du formulaire d'adhésion est la vérification du N° de carte PASTEF : le front appelle `/api/v1/adhesions/verifier-carte-pastef`, et les autres champs ne se débloquent qu'une fois la carte validée. Je venais de livrer une mise à jour du formulaire : `npm run build`, puis envoi du dossier `dist` sur l'hébergement.
+
+**Le problème :** Sur la version en ligne, la recherche de carte ne fonctionnait plus. Sous le champ, le message `Failed to fetch — réessayez ou contactez un administrateur MONCAP.`, et juste en dessous un encadré rouge : *« Carte PASTEF invalide ou introuvable »*. Pour un visiteur, le verdict était clair : sa carte n'existait pas. Sauf que la carte était bonne — c'était la requête qui n'aboutissait jamais.
+
+**L'enquête :** `Failed to fetch` n'est pas une réponse du serveur : c'est le navigateur qui dit qu'il n'a reçu aucune réponse. Inutile donc de soupçonner la carte ou la logique métier. J'ai ouvert les DevTools sur la page en ligne, onglet *Network*, et sélectionné la requête `verifier-carte-pastef`. Dans *Headers*, la ligne qui a tout réglé :
+
+```
+Request URL : http://localhost:8000/api/v1/adhesions/verifier-carte-pastef
+Origin      : https://moncap.innovamind.tech
+```
+
+Accompagnée de l'avertissement *« Provisional headers are shown »* : la requête n'était jamais allée au bout. Le site public, servi en HTTPS, appelait une API sur `localhost`. Chez un visiteur, `localhost` désigne sa propre machine, où rien n'écoute sur le port `8000`.
+
+**Le déclic :** Direction le fichier `.env` :
+
+```
+VITE_API_URL="http://localhost:8000"
+
+# VITE_API_URL="https://thior.alwaysdata.net"
+```
+
+J'avais basculé sur `localhost` pour travailler en local, et lancé `npm run build` sans revenir en arrière. Or les variables `VITE_*` ne sont pas lues au démarrage : Vite les remplace par leur valeur **au moment du build**, en texte brut dans le JavaScript. Le `dist` que j'avais déployé contenait mon adresse de développement, gravée dans le bundle. Rien côté hébergement ne pouvait la corriger après coup.
+
+**La résolution :** Inverser les deux lignes du `.env` (adresse de prod active, `localhost` en commentaire), relancer `npm run build`, redéployer le `dist`. Vérification sans passer par le formulaire : le bundle servi en ligne (`main-BfWYKIGr.js`) contenait bien `https://thior.alwaysdata.net` comme base de l'API, et la recherche de carte refonctionnait.
+
+**Ce que j'en retiens :**
+- Avec Vite, `.env` n'est pas une configuration d'exécution : c'est une entrée du build. Ce qui est dans le fichier au moment de `npm run build` part en production, définitivement.
+- J'avais pourtant listé ce piège dans l'entrée #2 (« une URL d'API contenant encore `localhost`, figée dans le bundle ») — sans m'en protéger. Une leçon qui reste dans un carnet ne protège de rien : elle doit devenir un garde-fou.
+- Un seul fichier qu'on commente/décommente selon l'environnement, c'est une erreur programmée. Vite charge tout seul `.env.development` pour `npm run dev` et `.env.production` pour `npm run build` : chaque adresse a sa place, et plus rien à basculer à la main.
+- Vérifier ce qui est réellement déployé, pas ce qu'on croit avoir buildé : un `grep localhost dist/assets` avant l'envoi, ou l'onglet *Network* juste après.
+- `Failed to fetch` signifie « pas de réponse », jamais « réponse négative ». L'interface l'a pourtant affiché comme une carte invalide : une erreur réseau ne doit pas se déguiser en verdict métier, surtout devant un futur adhérent.
+
+**Tags :** `#vite` `#react` `#env` `#build` `#deploiement` `#devtools` `#moncap`
+
+---
+
+## Entrée #6 — *(à venir)*
 
 *...*

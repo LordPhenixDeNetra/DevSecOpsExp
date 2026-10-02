@@ -340,7 +340,56 @@ Dernier rebondissement : le développeur frontend a signalé une erreur \texttt{
 \entryrule
 
 % =====================================================
-\section{Entrée \#5 --- \textit{(à venir)}}
+\section{Entrée \#5 --- 2 octobre 2026 --- La carte PASTEF que la prod cherchait sur ma machine}
+
+\subsection*{Contexte}
+MONCAP, la plateforme d'adhésion en React + Vite, était déployée en ligne sur \texttt{https://moncap.innovamind.tech}, avec un backend FastAPI hébergé à part. La première étape du formulaire d'adhésion est la vérification du N° de carte PASTEF : le front appelle \texttt{/api/v1/adhesions/verifier-carte-pastef}, et les autres champs ne se débloquent qu'une fois la carte validée. Je venais de livrer une mise à jour du formulaire : \texttt{npm run build}, puis envoi du dossier \texttt{dist} sur l'hébergement.
+
+\subsection*{Le problème}
+Sur la version en ligne, la recherche de carte ne fonctionnait plus. Sous le champ, le message \texttt{Failed to fetch --- réessayez ou contactez un administrateur MONCAP.}, et juste en dessous un encadré rouge : \enquote{Carte PASTEF invalide ou introuvable}. Pour un visiteur, le verdict était clair : sa carte n'existait pas. Sauf que la carte était bonne --- c'était la requête qui n'aboutissait jamais.
+
+\subsection*{L'enquête}
+\texttt{Failed to fetch} n'est pas une réponse du serveur : c'est le navigateur qui dit qu'il n'a reçu aucune réponse. Inutile donc de soupçonner la carte ou la logique métier. J'ai ouvert les DevTools sur la page en ligne, onglet \textit{Network}, et sélectionné la requête \texttt{verifier-carte-pastef}. Dans \textit{Headers}, la ligne qui a tout réglé :
+
+\needspace{5\baselineskip}
+\begin{lstlisting}
+Request URL : http://localhost:8000/api/v1/adhesions/verifier-carte-pastef
+Origin      : https://moncap.innovamind.tech
+\end{lstlisting}
+
+Accompagnée de l'avertissement \enquote{Provisional headers are shown} : la requête n'était jamais allée au bout. Le site public, servi en HTTPS, appelait une API sur \texttt{localhost}. Chez un visiteur, \texttt{localhost} désigne sa propre machine, où rien n'écoute sur le port \texttt{8000}.
+
+\subsection*{Le déclic}
+Direction le fichier \texttt{.env} :
+
+\needspace{5\baselineskip}
+\begin{lstlisting}
+VITE_API_URL="http://localhost:8000"
+
+# VITE_API_URL="https://thior.alwaysdata.net"
+\end{lstlisting}
+
+J'avais basculé sur \texttt{localhost} pour travailler en local, et lancé \texttt{npm run build} sans revenir en arrière. Or les variables \texttt{VITE\_*} ne sont pas lues au démarrage : Vite les remplace par leur valeur \textbf{au moment du build}, en texte brut dans le JavaScript. Le \texttt{dist} que j'avais déployé contenait mon adresse de développement, gravée dans le bundle. Rien côté hébergement ne pouvait la corriger après coup.
+
+\subsection*{La résolution}
+Inverser les deux lignes du \texttt{.env} (adresse de prod active, \texttt{localhost} en commentaire), relancer \texttt{npm run build}, redéployer le \texttt{dist}. Vérification sans passer par le formulaire : le bundle servi en ligne (\texttt{main-BfWYKIGr.js}) contenait bien \texttt{https://thior.alwaysdata.net} comme base de l'API, et la recherche de carte refonctionnait.
+
+\subsection*{Ce que j'en retiens}
+\begin{itemize}
+  \item Avec Vite, \texttt{.env} n'est pas une configuration d'exécution : c'est une entrée du build. Ce qui est dans le fichier au moment de \texttt{npm run build} part en production, définitivement.
+  \item J'avais pourtant listé ce piège dans l'entrée \#2 (\enquote{une URL d'API contenant encore \texttt{localhost}, figée dans le bundle}) --- sans m'en protéger. Une leçon qui reste dans un carnet ne protège de rien : elle doit devenir un garde-fou.
+  \item Un seul fichier qu'on commente/décommente selon l'environnement, c'est une erreur programmée. Vite charge tout seul \texttt{.env.development} pour \texttt{npm run dev} et \texttt{.env.production} pour \texttt{npm run build} : chaque adresse a sa place, et plus rien à basculer à la main.
+  \item Vérifier ce qui est réellement déployé, pas ce qu'on croit avoir buildé : un \texttt{grep localhost dist/assets} avant l'envoi, ou l'onglet \textit{Network} juste après.
+  \item \texttt{Failed to fetch} signifie \enquote{pas de réponse}, jamais \enquote{réponse négative}. L'interface l'a pourtant affiché comme une carte invalide : une erreur réseau ne doit pas se déguiser en verdict métier, surtout devant un futur adhérent.
+\end{itemize}
+
+\subsection*{Tags}
+\tag{vite} \quad \tag{react} \quad \tag{env} \quad \tag{build} \quad \tag{deploiement} \quad \tag{devtools} \quad \tag{moncap}
+
+\entryrule
+
+% =====================================================
+\section{Entrée \#6 --- \textit{(à venir)}}
 
 \textit{...}
 
