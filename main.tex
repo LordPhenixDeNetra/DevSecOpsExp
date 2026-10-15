@@ -389,7 +389,79 @@ Inverser les deux lignes du \texttt{.env} (adresse de prod active, \texttt{local
 \entryrule
 
 % =====================================================
-\section{Entrée \#6 --- \textit{(à venir)}}
+\section{Entrée \#6 --- 15 octobre 2026 --- Les 211 Go que Docker gardait pour lui}
+
+\subsection*{Contexte}
+La semaine précédente, j'avais énormément utilisé Docker : builds à répétition, images téléchargées, conteneurs lancés et relancés, sans jamais jeter un œil aux volumes ni au cache de build. Ce jour-là, je travaillais sur HermiNas et je lançais simplement \texttt{task bundle}, qui fait un \texttt{docker build -f deploy/Dockerfile --target dist -o dist .} pour produire le livrable.
+
+\subsection*{Le problème}
+Le build est mort avant même de commencer :
+
+\needspace{5\baselineskip}
+\begin{lstlisting}
+[+] Building 0.0s (0/0) docker:desktop-linux
+ERROR: failed to build: failed to solve: write /var/lib/desktop-containerd/daemon/io.containerd.metadata.v1.bolt/meta.db: input/output error
+task: Failed to run task "bundle": exit status 1
+\end{lstlisting}
+
+Un \texttt{input/output error} sur la base de métadonnées de containerd : j'ai eu très peur, ce genre de message fait penser à un disque qui lâche. Je suis allé voir \textit{Ce PC} : le disque local \textbf{C:} était tout rouge, \textbf{10 Go libres}. Le disque de données NETRA (\textbf{N:}), lui, avait encore 202 Go libres, alors que la veille les deux étaient à peu près au même niveau. En deux jours, C: s'était rempli. Et je me suis souvenu, trop tard, que mon collègue Mohamed Diallo m'avait parlé d'un problème de ce genre.
+
+\subsection*{L'enquête}
+Premier réflexe, avant de comprendre : ouvrir Docker Desktop et supprimer à la main conteneurs, images et volumes. Puis j'ai demandé une analyse du disque C:. Le scan complet était trop lent ; la piste qui a payé, c'est de trier \texttt{AppData\textbackslash Local} par date de modification. En tête : \texttt{Docker}, \texttt{wsl}, \texttt{docker-secrets-engine}, tous modifiés dans la nuit. Une recherche des disques virtuels a donné la réponse :
+
+\needspace{4\baselineskip}
+\begin{lstlisting}
+211.02 Go   AppData\Local\Docker\wsl\disk\docker_data.vhdx
+ 17.92 Go   AppData\Local\wsl\{74d3...}\ext4.vhdx
+\end{lstlisting}
+
+Le plus troublant : après mes suppressions dans Docker Desktop, le fichier faisait \textbf{toujours 211 Go}. J'avais tout vidé, et Windows ne voyait aucune différence.
+
+\subsection*{Le déclic}
+Docker Desktop ne stocke pas ses données directement dans Windows : tout vit dans un disque virtuel \texttt{docker\_data.vhdx}, monté dans la VM WSL~2. Ce fichier grossit à chaque image, chaque couche de build, chaque volume, mais \textbf{il ne rétrécit jamais tout seul}. Supprimer des images libère de la place \textit{à l'intérieur} du disque virtuel, pas sur C:. Et le \texttt{input/output error} n'était pas un disque mourant : c'était containerd qui n'arrivait plus à écrire dans un disque virtuel qui ne pouvait plus grandir, faute de place sur l'hôte.
+
+\subsection*{La résolution}
+Il fallait compacter le \texttt{.vhdx}, et chaque étape a eu son obstacle :
+
+\begin{enumerate}
+  \item \texttt{docker builder prune -a} $\rightarrow$ \enquote{The system cannot find the file specified} sur le pipe \texttt{dockerDesktopLinuxEngine}. Le moteur Docker était arrêté ; comme j'avais déjà tout supprimé, je suis passé directement au compactage.
+  \item \texttt{compact vdisk} dans \texttt{diskpart} $\rightarrow$ \enquote{Le processus ne peut pas accéder au fichier car ce fichier est utilisé par un autre processus}. Docker et WSL tenaient encore le fichier.
+  \item \texttt{wsl --shutdown} puis \texttt{Stop-Process} sur \texttt{vmmem} et \texttt{wslservice} $\rightarrow$ \textit{Accès refusé} : mon PowerShell n'était pas lancé en administrateur.
+  \item Dans un PowerShell \textbf{administrateur} :
+\end{enumerate}
+
+\needspace{11\baselineskip}
+\begin{lstlisting}
+wsl --shutdown
+Stop-Service WSLService -Force
+diskpart
+
+select vdisk file="C:\Users\DELL\AppData\Local\Docker\wsl\disk\docker_data.vhdx"
+attach vdisk readonly
+compact vdisk
+detach vdisk
+exit
+\end{lstlisting}
+
+\texttt{vmmem} apparaissait encore dans la liste des processus, mais avec le service WSL arrêté, le compactage est passé : \textbf{211 Go $\rightarrow$ 4,1 Go}, et C: est remonté à \textbf{308 Go libres}. Un dernier faux pas : j'avais quitté \texttt{diskpart} sans \texttt{detach vdisk}, et en tapant \texttt{select vdisk ...} directement dans PowerShell, j'ai eu une erreur \texttt{Select-Object} : \texttt{select} y est l'alias d'un cmdlet PowerShell. Les commandes \texttt{diskpart} ne marchent qu'à l'invite \texttt{DISKPART>}.
+
+\subsection*{Ce que j'en retiens}
+\begin{itemize}
+  \item Supprimer dans Docker Desktop ne rend pas l'espace à Windows. Le vrai coupable se mesure dans \texttt{AppData\textbackslash Local\textbackslash Docker\textbackslash wsl\textbackslash disk\textbackslash docker\_data.vhdx}, et se règle par un compactage.
+  \item Mesurer avant de supprimer : \texttt{docker system df} montre ce qui pèse vraiment (images, conteneurs, volumes, \textbf{cache de build}). J'ai tout effacé à l'aveugle, volumes compris, alors que le cache de build était sans doute le plus gros morceau.
+  \item Un \texttt{input/output error} dans Docker n'annonce pas forcément un disque qui meurt : vérifier d'abord l'espace libre sur l'hôte.
+  \item Prévenir plutôt que guérir : plafonner la taille du disque dans \textit{Settings $\rightarrow$ Resources $\rightarrow$ Advanced} (ou le déplacer sur N:), activer le ramasse-miettes du builder (\texttt{"builder": \{ "gc": \{ "enabled": true, "defaultKeepStorage": "20GB" \} \}}) et lancer de temps en temps \texttt{docker builder prune}.
+  \item Quand un fichier est \enquote{utilisé par un autre processus}, la réponse n'est pas de forcer : arrêter proprement ce qui le tient (\texttt{wsl --shutdown}, service WSL), en administrateur.
+  \item Mohamed m'avait prévenu. Un retour d'expérience entendu, mais pas noté, ne protège de rien : c'est exactement pour ça que ce recueil existe.
+\end{itemize}
+
+\subsection*{Tags}
+\tag{docker} \quad \tag{wsl2} \quad \tag{windows} \quad \tag{disque} \quad \tag{vhdx} \quad \tag{diskpart} \quad \tag{build-cache} \quad \tag{herminas}
+
+\entryrule
+
+% =====================================================
+\section{Entrée \#7 --- \textit{(à venir)}}
 
 \textit{...}
 

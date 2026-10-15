@@ -213,6 +213,66 @@ J'avais basculé sur `localhost` pour travailler en local, et lancé `npm run bu
 
 ---
 
-## Entrée #6 — *(à venir)*
+## Entrée #6 — 15 octobre 2026 — Les 211 Go que Docker gardait pour lui
+
+**Contexte :** La semaine précédente, j'avais énormément utilisé Docker : builds à répétition, images téléchargées, conteneurs lancés et relancés, sans jamais jeter un œil aux volumes ni au cache de build. Ce jour-là, je travaillais sur HermiNas et je lançais simplement `task bundle`, qui fait un `docker build -f deploy/Dockerfile --target dist -o dist .` pour produire le livrable.
+
+**Le problème :** Le build est mort avant même de commencer :
+
+```
+[+] Building 0.0s (0/0) docker:desktop-linux
+ERROR: failed to build: failed to solve: write /var/lib/desktop-containerd/daemon/io.containerd.metadata.v1.bolt/meta.db: input/output error
+task: Failed to run task "bundle": exit status 1
+```
+
+Un `input/output error` sur la base de métadonnées de containerd : j'ai eu très peur, ce genre de message fait penser à un disque qui lâche. Je suis allé voir *Ce PC* : le disque local **C:** était tout rouge, **10 Go libres**. Le disque de données NETRA (**N:**), lui, avait encore 202 Go libres, alors que la veille les deux étaient à peu près au même niveau. En deux jours, C: s'était rempli. Et je me suis souvenu, trop tard, que mon collègue Mohamed Diallo m'avait parlé d'un problème de ce genre.
+
+**L'enquête :** Premier réflexe, avant de comprendre : ouvrir Docker Desktop et supprimer à la main conteneurs, images et volumes. Puis j'ai demandé une analyse du disque C:. Le scan complet était trop lent ; la piste qui a payé, c'est de trier `AppData\Local` par date de modification. En tête : `Docker`, `wsl`, `docker-secrets-engine`, tous modifiés dans la nuit. Une recherche des disques virtuels a donné la réponse :
+
+```
+211.02 Go   AppData\Local\Docker\wsl\disk\docker_data.vhdx
+ 17.92 Go   AppData\Local\wsl\{74d3...}\ext4.vhdx
+```
+
+Le plus troublant : après mes suppressions dans Docker Desktop, le fichier faisait **toujours 211 Go**. J'avais tout vidé, et Windows ne voyait aucune différence.
+
+**Le déclic :** Docker Desktop ne stocke pas ses données directement dans Windows : tout vit dans un disque virtuel `docker_data.vhdx`, monté dans la VM WSL 2. Ce fichier grossit à chaque image, chaque couche de build, chaque volume, mais **il ne rétrécit jamais tout seul**. Supprimer des images libère de la place *à l'intérieur* du disque virtuel, pas sur C:. Et le `input/output error` n'était pas un disque mourant : c'était containerd qui n'arrivait plus à écrire dans un disque virtuel qui ne pouvait plus grandir, faute de place sur l'hôte.
+
+**La résolution :** Il fallait compacter le `.vhdx`, et chaque étape a eu son obstacle :
+
+1. `docker builder prune -a` → `open //./pipe/dockerDesktopLinuxEngine: The system cannot find the file specified`. Le moteur Docker était arrêté ; comme j'avais déjà tout supprimé, je suis passé directement au compactage.
+2. `compact vdisk` dans `diskpart` → *« Le processus ne peut pas accéder au fichier car ce fichier est utilisé par un autre processus »*. Docker et WSL tenaient encore le fichier.
+3. `wsl --shutdown` puis `Stop-Process` sur `vmmem` et `wslservice` → *Accès refusé* : mon PowerShell n'était pas lancé en administrateur.
+4. Dans un PowerShell **administrateur** :
+
+```powershell
+wsl --shutdown
+Stop-Service WSLService -Force
+diskpart
+```
+
+```
+select vdisk file="C:\Users\DELL\AppData\Local\Docker\wsl\disk\docker_data.vhdx"
+attach vdisk readonly
+compact vdisk
+detach vdisk
+exit
+```
+
+`vmmem` apparaissait encore dans la liste des processus, mais avec le service WSL arrêté, le compactage est passé : **211 Go → 4,1 Go**, et C: est remonté à **308 Go libres**. Un dernier faux pas : j'avais quitté `diskpart` sans `detach vdisk`, et en tapant `select vdisk ...` directement dans PowerShell, j'ai eu une erreur `Select-Object` : `select` y est l'alias d'un cmdlet PowerShell. Les commandes `diskpart` ne marchent qu'à l'invite `DISKPART>`.
+
+**Ce que j'en retiens :**
+- Supprimer dans Docker Desktop ne rend pas l'espace à Windows. Le vrai coupable se mesure dans `AppData\Local\Docker\wsl\disk\docker_data.vhdx`, et se règle par un compactage.
+- Mesurer avant de supprimer : `docker system df` montre ce qui pèse vraiment (images, conteneurs, volumes, **cache de build**). J'ai tout effacé à l'aveugle, volumes compris, alors que le cache de build était sans doute le plus gros morceau.
+- Un `input/output error` dans Docker n'annonce pas forcément un disque qui meurt : vérifier d'abord l'espace libre sur l'hôte.
+- Prévenir plutôt que guérir : plafonner la taille du disque dans *Settings → Resources → Advanced* (ou le déplacer sur N:), activer le ramasse-miettes du builder (`"builder": { "gc": { "enabled": true, "defaultKeepStorage": "20GB" } }`) et lancer de temps en temps `docker builder prune`.
+- Quand un fichier est « utilisé par un autre processus », la réponse n'est pas de forcer : arrêter proprement ce qui le tient (`wsl --shutdown`, service WSL), en administrateur.
+- Mohamed m'avait prévenu. Un retour d'expérience entendu, mais pas noté, ne protège de rien : c'est exactement pour ça que ce recueil existe.
+
+**Tags :** `#docker` `#wsl2` `#windows` `#disque` `#vhdx` `#diskpart` `#build-cache` `#herminas`
+
+---
+
+## Entrée #7 — *(à venir)*
 
 *...*
