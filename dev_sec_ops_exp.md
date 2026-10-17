@@ -273,6 +273,68 @@ exit
 
 ---
 
-## Entrée #7 — *(à venir)*
+## Entrée #7 — 17 octobre 2026 — Le port 80 que Caddy avait pris à Traefik
+
+**Contexte :** Avec Mohamed, nous devions rencontrer un vendeur d'intrants agricoles du marché de Thiaroye pour lui présenter Agroboom. Avant de partir, chacun de chez soi, nous avons fait un dernier tour de l'application. Toute ma plateforme est déployée avec Dokploy sur un VPS Hostinger : applications web, API, bases de données, MinIO, le tout en conteneurs Docker derrière Traefik, le reverse proxy fourni par Dokploy.
+
+**Le problème :** L'application mobile et l'application web ne fonctionnaient plus : plus de données reçues, plus d'accès. L'API elle-même ne répondait pas. À quelques heures d'une démonstration, c'est le pire moment pour s'en apercevoir. En ouvrant la console MinIO dans le navigateur, un message : *« Ce site ne peut pas fournir de connexion sécurisée »*, avec `ERR_SSL_PROTOCOL_ERROR`. Même erreur sur tous mes domaines, y compris ceux des applications qui n'avaient rien à voir entre elles.
+
+**L'enquête :** Le premier réflexe utile a été de ne pas déboguer application par application. Web, mobile, API et console MinIO tombaient en même temps : le point commun ne pouvait pas être dans leur code, mais dans ce qui reçoit leur trafic HTTPS, c'est-à-dire Traefik. Sur le serveur :
+
+```
+docker ps | grep traefik
+(aucune sortie)
+
+docker restart dokploy-traefik
+Error response from daemon: Cannot restart container dokploy-traefik: failed to set up container networking: ... failed to bind host port 0.0.0.0:80/tcp: address already in use
+```
+
+Traefik n'était pas dans la liste des conteneurs en marche, et il refusait de redémarrer parce que quelqu'un d'autre tenait déjà le port 80. Il restait à trouver qui :
+
+```
+ss -tlnp | grep -E ':80 |:443 '
+LISTEN 0 4096 *:80  *:* users:(("caddy",pid=764,fd=10))
+LISTEN 0 4096 *:443 *:* users:(("caddy",pid=764,fd=7))
+```
+
+**Le déclic :** Un **Caddy**, installé directement sur le serveur et non dans Docker, occupait les ports 80 et 443. Traefik n'était pas cassé : il était arrêté, et empêché de reprendre sa place. Cela expliquait l'erreur du navigateur : sur le port 443, quelqu'un répondait, mais ce n'était pas le bon, d'où `ERR_SSL_PROTOCOL_ERROR`. Un détail du `docker ps` donne une piste, sans que je l'aie vérifiée : tous les conteneurs, même ceux créés il y a quatre mois, affichaient « Up 10 minutes ». Le serveur ou Docker avait donc redémarré peu avant, et Caddy a très probablement pris les ports avant Traefik.
+
+**La résolution :** J'ai arrêté Caddy, puis relancé Traefik :
+
+```
+systemctl stop caddy
+docker start dokploy-traefik
+```
+
+Nouveau symptôme : le message du navigateur a changé pour `ERR_CONNECTION_TIMED_OUT`. Traefik apparaissait « Up », mais la colonne PORTS de `docker ps` était vide et `ss` ne voyait plus rien sur les ports 80 et 443. Avant d'envisager de réinstaller Dokploy, j'ai vérifié la configuration du conteneur :
+
+```
+docker inspect dokploy-traefik --format '{{json .HostConfig.PortBindings}}'
+{"443/tcp":[{"HostPort":"443"}],"443/udp":[{"HostPort":"443"}],"80/tcp":[{"HostPort":"80"}]}
+```
+
+La configuration était correcte : c'était l'état du conteneur qui était bancal, après un démarrage raté suivi d'un simple `docker start`. Un vrai redémarrage a tout réglé :
+
+```
+docker restart dokploy-traefik
+```
+
+Les ports 80 et 443 sont réapparus, et le HTTPS est revenu sur mes domaines. Au total, environ une heure de diagnostic.
+
+**Ce que j'en retiens :**
+- Quand tout tombe en même temps (web, mobile, API, console MinIO), il ne faut pas déboguer chaque application : il faut chercher ce qu'elles ont en commun. Ici, c'était le reverse proxy.
+- Le message d'erreur du navigateur dit où l'on en est. `ERR_SSL_PROTOCOL_ERROR` signifie que quelque chose répond mais que ce n'est pas le bon ; `ERR_CONNECTION_TIMED_OUT` signifie que plus personne n'écoute. Quand l'erreur change, c'est qu'on avance.
+- Un `address already in use` se résout en une commande : `ss -tlnp | grep -E ':80 |:443 '` donne le nom du processus qui occupe le port.
+- Un conteneur « Up » ne prouve pas qu'il est joignable. Une colonne PORTS vide veut dire qu'aucun port n'est publié. Après un échec de démarrage, un `docker restart` propre vaut mieux qu'un simple `docker start`.
+- Avant de réinstaller un outil par réflexe, lire l'état réel : ici, `PortBindings` était correct, donc la réinstallation n'aurait rien réparé.
+- Un seul reverse proxy par serveur. Si Caddy ne sert à rien ici, il faut le désactiver au démarrage (`systemctl disable caddy`), sinon il reprendra les ports au prochain redémarrage. Reste à élucider qui l'a installé et pourquoi.
+- C'est notre dernier test avant de partir qui nous a sauvés : sans ce réflexe, la panne se serait découverte devant le client. Une mini-liste de vérification (web, `/docs` de l'API, mobile) et une alerte externe de disponibilité, du type UptimeRobot, permettraient de la voir avant tout le monde.
+- Le `docker ps` a aussi montré plusieurs ports ouverts sur Internet (PostgreSQL 5432, MinIO 9000-9001, Dokploy 3000, Supavisor 5433 et 6543). Derrière Traefik, ils n'ont pas besoin d'être publiés : c'est un chantier de sécurité à ouvrir.
+
+**Tags :** `#docker` `#dokploy` `#traefik` `#caddy` `#reverse-proxy` `#hostinger` `#ssl` `#réseau` `#agroboom`
+
+---
+
+## Entrée #8 — *(à venir)*
 
 *...*
