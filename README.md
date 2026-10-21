@@ -67,3 +67,5 @@ Le PDF généré `main.pdf` est ignoré par git (voir `.gitignore`).
 ## 📜 Licence
 
 Usage privé / personnel. Ce recueil documente des expériences vécues — libre à chacun de s'en inspirer.
+
+<!-- Modification -->
