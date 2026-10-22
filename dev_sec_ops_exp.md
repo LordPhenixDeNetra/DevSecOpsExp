@@ -335,6 +335,119 @@ Les ports 80 et 443 sont réapparus, et le HTTPS est revenu sur mes domaines. Au
 
 ---
 
-## Entrée #8 — *(à venir)*
+## Entrée #8 — Du 21 au 22 octobre 2026 — Le pare-feu « WireGuard » qui a coupé tous mes sites
+
+**Contexte :** J'installais l'infrastructure de test d'aNkou, le VPN que je développe en Rust : l'API et un serveur WireGuard sur mon VPS Hostinger principal, un second serveur WireGuard sur un autre VPS. Le VPS principal héberge déjà toutes mes applications (Hopitalia, Nephro, Anapath…) déployées avec Dokploy, derrière Traefik. Il fallait donc faire cohabiter aNkou avec l'existant sans rien casser : pas de Caddy, une route Traefik dédiée pour l'API, et le port UDP 51820 à ouvrir pour WireGuard. Une des consignes disait : *« Si le pare-feu d'Hostinger est actif dans hPanel, ouvrez-y aussi UDP 51820. »* Il était près de minuit.
+
+**Le problème :** Tout semblait en place, mais les deux *nodes* aNkou n'arrivaient pas à joindre l'API : `délai de connexion dépassé` sur l'un, `invalid peer certificate: UnknownIssuer` sur l'autre. Traefik servait son certificat par défaut (`TRAEFIK DEFAULT CERT`) au lieu d'un certificat Let's Encrypt, et son journal disait pourquoi :
+
+```
+Unable to obtain ACME certificate for domains ... [ankouapi.hopitalia.cloud]
+acme: error: 400 :: urn:ietf:params:acme:error:connection :: 187.124.9.132:
+Fetching http://ankouapi.hopitalia.cloud/.well-known/acme-challenge/...: Timeout during connect (likely firewall problem)
+```
+
+**L'enquête :** Le DNS était bon (`dig` donnait bien `187.124.9.132`), l'IP publique du VPS aussi (`curl ifconfig.me`). Depuis le VPS lui-même, Traefik répondait. Mais depuis le second VPS, même mon site `nephroapi`, qui marchait depuis des mois, ne répondait plus (`code 000`). Et depuis mon PC :
+
+```
+Test-NetConnection 187.124.9.132 -Port 443
+TCP connect to (187.124.9.132 : 443) failed
+Ping to 187.124.9.132 failed with status: TimedOut
+```
+
+Plus de port 443, plus de port 80, plus de ping. En vérifiant mes domaines un par un, le constat est tombé : **tous les sites du VPS principal étaient inaccessibles depuis Internet.** Le VPS, lui, sortait normalement vers Internet (`google : code 200`).
+
+**Le déclic :** Un serveur qui ne reçoit plus rien mais qui sort sans problème, c'est un filtrage en entrée, en amont du serveur. Dans hPanel, VPS, Sécurité, Pare-feu : un pare-feu nommé **« WireGuard »**, créé la veille, actif sur les deux VPS, avec deux règles seulement : *Accept UDP 51820*, puis *Drop Any*. Et l'encadré d'Hostinger le dit noir sur blanc : *« By default, the Hostinger VPS Firewall drops all incoming traffic »*. En voulant ouvrir un seul port, j'avais créé un pare-feu qui fermait tous les autres. En pleine nuit, personne ne s'en était encore aperçu : sans le certificat de l'API qui refusait de venir, j'aurais pu le découvrir le matin, par mes utilisateurs.
+
+**La résolution :** J'ai supprimé ce pare-feu Hostinger sur les deux VPS. `ufw`, sur chaque serveur, protégeait déjà la machine, et autorisait déjà UDP 51820. Le port 443 a répondu aussitôt (`TcpTestSucceeded : True`) et mes sites sont revenus. Pour que Traefik redemande le certificat de l'API sans le redémarrer (et donc sans couper mes autres sites), j'ai renommé la route dans son fichier dynamique, ce qui l'oblige à la traiter comme une nouvelle :
+
+```
+sed -i 's/ankou-api-router/ankou-api-route/g' /etc/dokploy/traefik/dynamic/ankou-api.yml
+```
+
+Une minute plus tard, `issuer=C = US, O = Let's Encrypt` et `{"status":"ok"}` sur `https://ankouapi.hopitalia.cloud/v1/health`.
+
+**Ce que j'en retiens :**
+- Un pare-feu d'hébergeur n'« ouvre » pas un port : il **ferme tout le reste**. Avant d'en activer un, lister **tous** les ports qu'utilisent déjà les serveurs (`ufw status`, `ss -ltnup`), ou ne pas en activer du tout si `ufw` fait déjà le travail.
+- Ne jamais tester la joignabilité d'un serveur depuis lui-même : il se répond sans passer par Internet. Tester depuis l'extérieur (un autre VPS, mon PC, ou Let's Encrypt, qui a été le premier à me le dire).
+- `Timeout during connect (likely firewall problem)` dans un journal ACME : le message avait raison du premier coup.
+- Un serveur qui sort mais ne reçoit plus rien, ping compris : chercher un filtre en amont avant de soupçonner les services.
+- Traefik ne redemande pas tout seul un certificat qui a échoué ; renommer la route dans le fichier dynamique force une nouvelle demande, sans redémarrage.
+- Une consigne de déploiement qui touche au réseau d'une machine en production mérite d'être relue deux fois, surtout à une heure du matin.
+
+**Tags :** `#hostinger` `#pare-feu` `#dokploy` `#traefik` `#letsencrypt` `#wireguard` `#ankou` `#réseau`
+
+---
+
+## Entrée #9 — 22 octobre 2026 — Le kill switch qui ne voulait plus me lâcher
+
+**Contexte :** aNkou, mon VPN, venait de sortir en version 1.0.0, avec des installeurs pour Windows, macOS et Linux. Sur mon PC Windows, tout marchait : connexion à mon VPS de Francfort, IP masquée, aucune fuite DNS. Restaient les tests de protection, dont celui-ci : tuer de force le service `ankoud` en pleine connexion, comme s'il plantait, et vérifier que rien ne sort en clair pendant que Windows le relance. Le kill switch d'aNkou repose sur des filtres WFP (Windows Filtering Platform) **persistants** : ils survivent volontairement à un plantage ou à un redémarrage, pour qu'aucune donnée ne fuie hors du tunnel.
+
+**Le problème :**
+
+```
+taskkill /F /IM ankoud.exe
+```
+
+Plus d'Internet, comme prévu. Mais le VPN ne revenait pas. Et ça ne revenait toujours pas cinq minutes, une heure, un redémarrage du PC plus tard :
+
+```
+ping 8.8.8.8      -> Défaillance générale (perte 100 %)
+ping 192.168.1.1  -> Défaillance générale
+ping google.com   -> hôte introuvable
+```
+
+Même la box ne répondait plus. Mon PC n'avait plus de réseau du tout.
+
+**L'enquête :** Avec un assistant, j'ai d'abord vérifié l'évidence : table de routage saine (route par défaut vers `192.168.1.1`), Wi-Fi connecté avec une adresse DHCP, ARP qui résolvait la box. Le blocage était donc au niveau IP, pas au niveau de la carte. Puis la série des remèdes classiques, sans effet : `netsh winsock reset`, `netsh int ip reset`, `netsh advfirewall reset`, Tailscale coupé, liaison VirtualBox désactivée, redémarrages. La piste qui a payé a été de lister les filtres de la couche la plus basse du pare-feu Windows :
+
+```
+netsh wfp show filters file=filters.xml
+```
+
+Seize filtres de blocage nommés **« aNkou »**, en entrée et en sortie, IPv4 et IPv6. Persistants, donc intouchables par `netsh advfirewall reset`. Après plusieurs tentatives pour les supprimer par appel direct à `fwpuclnt.dll` depuis PowerShell, le réseau est revenu, sans que je sache avec certitude laquelle des étapes avait réglé le problème. Une question restait surtout : pourquoi le service, relancé par Windows, ne les avait-il pas pris en charge ?
+
+**Le déclic :** Le journal système de Windows a tout dit :
+
+```
+03:45:44  Le service aNkou VPN s'est terminé de manière inattendue. [...] Redémarrer le service.
+03:45:50  Le dépassement de délai (30000 millisecondes) a été atteint lors de l'attente de la connexion du service aNkou VPN.
+04:00:57  [...] 14:46:24  [...] 15:50:30  (même erreur à chaque démarrage)
+```
+
+Windows avait bien relancé le service, cinq secondes après le `taskkill`. Mais depuis, **le service n'avait plus jamais réussi à démarrer** : il mourait avant même de se signaler à Windows. Le coupable était dans la toute première chose qu'il fait au démarrage : verrouiller les droits de son dossier `C:\ProgramData\aNkou` avec `icacls ... /T`, c'est-à-dire sur **tous les fichiers**. Or les règles d'héritage `(OI)(CI)` ne valent que pour un dossier : appliquées à un fichier, elles ne posent rien. Après `/inheritance:r`, les fichiers se retrouvaient sans **aucun** droit :
+
+```
+icacls C:\ProgramData\aNkou /T
+C:\ProgramData\aNkou\endpoint
+C:\ProgramData\aNkou\profile.toml
+(aucun droit listé sous les fichiers)
+
+icacls "C:\ProgramData\aNkou" /setowner "*S-1-5-32-544" /T
+C:\ProgramData\aNkou\endpoint: Accès refusé.
+```
+
+La commande suivante échouait, le service s'arrêtait. Au premier lancement, après l'installation, le dossier était vide : rien à abîmer. C'est **le premier redémarrage** du service qui le cassait, et mon `taskkill` n'avait fait que le déclencher. N'importe quel redémarrage du PC l'aurait fait aussi. Le kill switch a fait exactement son travail : bloquer tant que le service ne disait pas le contraire. Sauf que le service ne pouvait plus rien dire.
+
+**La résolution :** Une version 1.0.1, le jour même :
+- les droits ne sont plus posés que sur le dossier, dont les fichiers héritent ; le contenu est remis à l'héritage (`icacls ...\* /reset /T /C`), ce qui répare aussi les installations 1.0.0, et un échec à cette étape ne bloque plus jamais le démarrage ;
+- une sortie de secours, `ankoud --unblock`, qui retire le kill switch sans passer par le service, et que le message « service absent » de l'application cite désormais ;
+- le scénario exact (installation, redémarrage du service, `taskkill`, vérification qu'il revient) ajouté au test automatique de chaque version, sur Windows, Linux et macOS.
+
+L'assistant m'avait aussi proposé de rendre les filtres « dynamiques », pour qu'ils disparaissent avec le processus. J'ai gardé les filtres persistants : un kill switch qui s'évapore quand le service plante laisse justement sortir le trafic en clair au pire moment.
+
+**Ce que j'en retiens :**
+- Un test de plantage doit vérifier que le service **revient**, pas seulement qu'il bloque. Ma CI installait et désinstallait, mais ne redémarrait jamais le service : le bug est passé sous son nez.
+- Une protection *fail-closed* sans sortie de secours documentée est un piège. La bonne sortie existait (`ankou-cli disconnect`), mais elle demandait un service vivant et n'apparaissait nulle part à l'écran.
+- Quand un service Windows « ne démarre pas assez vite », regarder le journal **System** du *Service Control Manager* avant tout : il donne l'heure exacte de chaque échec.
+- `icacls ... /T` avec des droits `(OI)(CI)` est un piège : ces drapeaux ne s'appliquent qu'aux dossiers. Poser les droits sur le dossier et laisser l'héritage faire le reste.
+- `netsh advfirewall reset` ne touche pas aux filtres WFP posés par une application ; `netsh wfp show filters` les montre tous.
+- Réinitialiser toute la pile réseau « au cas où » coûte cher : règles du pare-feu perdues, Tailscale et VirtualBox à réactiver. Chercher **qui** bloque avant de tout remettre à zéro.
+
+**Tags :** `#windows` `#wfp` `#kill-switch` `#icacls` `#service-windows` `#vpn` `#rust` `#ankou` `#ci`
+
+---
+
+## Entrée #10 — *(à venir)*
 
 *...*
